@@ -1,5 +1,10 @@
 """
-Fine-tune DistilBERT on eliasalbouzidi/NSFW-Safe-Dataset for text classification.
+Fine-tune a transformer model on eliasalbouzidi/NSFW-Safe-Dataset for text classification.
+
+Supported models (pass via --model_name):
+  distilbert-base-uncased  (default, baseline)
+  distilroberta-base       (ablation)
+  roberta-base             (ablation)
 """
 
 import argparse
@@ -17,7 +22,6 @@ from transformers import (
 )
 import evaluate
 
-MODEL_NAME = "distilbert-base-uncased"
 DATASET_NAME = "eliasalbouzidi/NSFW-Safe-Dataset"
 POS_WEIGHT = 1.66  # weight for the positive (NSFW) class in CrossEntropyLoss
 
@@ -34,8 +38,15 @@ class WeightedTrainer(Trainer):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Fine-tune DistilBERT for NSFW classification")
-    parser.add_argument("--output_dir", type=str, default="./distilbert-nsfw", help="Directory to save model")
+    parser = argparse.ArgumentParser(description="Fine-tune a transformer model for NSFW classification")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="distilbert-base-uncased",
+        choices=["distilbert-base-uncased", "distilroberta-base", "roberta-base"],
+        help="HuggingFace model to fine-tune",
+    )
+    parser.add_argument("--output_dir", type=str, default=None, help="Directory to save model (default: ./<model_name>-nsfw)")
     parser.add_argument("--num_train_epochs", type=int, default=3)
     parser.add_argument("--per_device_train_batch_size", type=int, default=32)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=64)
@@ -46,6 +57,14 @@ def parse_args():
     parser.add_argument("--wandb_project", type=str, default="distilbert-nsfw", help="W&B project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="W&B run name (auto-generated if not set)")
     parser.add_argument("--no_wandb", action="store_true", help="Disable W&B logging")
+    parser.add_argument(
+        "--eval_strategy",
+        type=str,
+        default="epoch",
+        choices=["epoch", "steps"],
+        help="Evaluation strategy: 'epoch' (default) or 'steps'",
+    )
+    parser.add_argument("--eval_steps", type=int, default=500, help="Evaluate every N steps (only used when --eval_strategy=steps)")
     return parser.parse_args()
 
 
@@ -109,6 +128,9 @@ def get_label_info(dataset, label_col):
 def main():
     args = parse_args()
 
+    if args.output_dir is None:
+        args.output_dir = f"./{args.model_name}-nsfw"
+
     # ------------------------------------------------------------------
     # 0. W&B
     # ------------------------------------------------------------------
@@ -119,7 +141,7 @@ def main():
             project=args.wandb_project,
             name=args.wandb_run_name,
             config={
-                "model": MODEL_NAME,
+                "model": args.model_name,
                 "dataset": DATASET_NAME,
                 "num_train_epochs": args.num_train_epochs,
                 "per_device_train_batch_size": args.per_device_train_batch_size,
@@ -159,7 +181,7 @@ def main():
     # ------------------------------------------------------------------
     # 2. Tokenise
     # ------------------------------------------------------------------
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
     def tokenize(batch):
         return tokenizer(
@@ -193,7 +215,7 @@ def main():
     # 3. Model
     # ------------------------------------------------------------------
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME,
+        args.model_name,
         num_labels=num_labels,
         id2label=id2label,
         label2id=label2id,
@@ -224,8 +246,10 @@ def main():
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        eval_strategy="epoch",
-        save_strategy="epoch",
+        eval_strategy=args.eval_strategy,
+        eval_steps=args.eval_steps if args.eval_strategy == "steps" else None,
+        save_strategy=args.eval_strategy,
+        save_steps=args.eval_steps if args.eval_strategy == "steps" else None,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         logging_steps=100,

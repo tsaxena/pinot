@@ -1,6 +1,6 @@
 # pinot
 
-Fine-tune DistilBERT on the [eliasalbouzidi/NSFW-Safe-Dataset](https://huggingface.co/datasets/eliasalbouzidi/NSFW-Safe-Dataset) for binary text classification (NSFW vs. Safe).
+Fine-tune transformer models on the [eliasalbouzidi/NSFW-Safe-Dataset](https://huggingface.co/datasets/eliasalbouzidi/NSFW-Safe-Dataset) for binary text classification (NSFW vs. Safe).
 
 ## Setup
 
@@ -38,7 +38,8 @@ python train.py \
 
 | Argument | Default | Description |
 |---|---|---|
-| `--output_dir` | `./distilbert-nsfw` | Directory to save model checkpoints |
+| `--model_name` | `distilbert-base-uncased` | Model to fine-tune (`distilbert-base-uncased`, `distilroberta-base`, `roberta-base`) |
+| `--output_dir` | `./<model_name>-nsfw` | Directory to save model checkpoints |
 | `--num_train_epochs` | `3` | Number of training epochs |
 | `--per_device_train_batch_size` | `32` | Training batch size per device |
 | `--per_device_eval_batch_size` | `64` | Evaluation batch size per device |
@@ -46,9 +47,45 @@ python train.py \
 | `--weight_decay` | `0.01` | Weight decay |
 | `--max_seq_length` | `128` | Max token length for truncation |
 | `--seed` | `42` | Random seed |
+| `--eval_strategy` | `epoch` | When to evaluate: `epoch` or `steps` |
+| `--eval_steps` | `500` | Evaluate every N steps (only when `--eval_strategy=steps`) |
 | `--wandb_project` | `distilbert-nsfw` | W&B project name |
 | `--wandb_run_name` | auto | W&B run name |
 | `--no_wandb` | `False` | Disable W&B logging |
+
+## Ablations
+
+Run each model with identical hyperparameters to isolate the effect of architecture:
+
+```bash
+# Baseline
+python train.py --model_name distilbert-base-uncased --wandb_run_name distilbert-baseline
+
+# Ablation 1: DistilRoBERTa
+python train.py --model_name distilroberta-base --wandb_run_name distilroberta-ablation
+
+# Ablation 2: RoBERTa
+python train.py --model_name roberta-base --wandb_run_name roberta-ablation
+```
+
+Each run saves its checkpoint to `./<model_name>-nsfw/` by default and logs to W&B under the same project for easy comparison.
+
+## Baseline Hyperparameters
+
+| Hyperparameter | Value |
+|---|---|
+| Model | `distilbert-base-uncased` |
+| Epochs | `3` |
+| Train batch size (per device) | `32` |
+| Eval batch size (per device) | `64` |
+| Learning rate | `2e-5` |
+| Weight decay | `0.01` |
+| Max sequence length | `128` |
+| Optimizer | AdamW |
+| LR scheduler | Linear (Transformers default) |
+| NSFW class weight (`pos_weight`) | `1.66` |
+| Best model metric | F1 |
+| Seed | `42` |
 
 ## Loss Function
 
