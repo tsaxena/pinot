@@ -8,6 +8,7 @@ Supported models (pass via --model_name):
 """
 
 import argparse
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -252,6 +253,8 @@ def main():
         save_steps=args.eval_steps if args.eval_strategy == "steps" else None,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
+        greater_is_better=True,
+        save_total_limit=1,
         logging_steps=100,
         seed=args.seed,
         report_to="wandb",
@@ -272,11 +275,17 @@ def main():
     trainer.train()
 
     # ------------------------------------------------------------------
-    # 6. Save final model
+    # 6. Save best model
     # ------------------------------------------------------------------
-    trainer.save_model(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
-    print(f"Model saved to {args.output_dir}")
+    best_model_dir = os.path.join(args.output_dir, "best")
+    trainer.save_model(best_model_dir)
+    tokenizer.save_pretrained(best_model_dir)
+    print(f"Best model saved to {best_model_dir}")
+
+    if trainer.state.best_metric is not None:
+        print(f"Best eval/f1: {trainer.state.best_metric:.4f}")
+        wandb.log({"best_eval_f1": trainer.state.best_metric})
+
     wandb.finish()
 
 

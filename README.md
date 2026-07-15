@@ -53,6 +53,49 @@ python train.py \
 | `--wandb_run_name` | auto | W&B run name |
 | `--no_wandb` | `False` | Disable W&B logging |
 
+## Evaluating on WildJailbreak
+
+[allenai/wildjailbreak](https://huggingface.co/datasets/allenai/wildjailbreak) is a held-out benchmark of 2,210 adversarial prompts (2,000 harmful + 210 benign). `eval_wildjailbreak.py` runs a trained checkpoint through the dataset and reports:
+
+- **Overall**: accuracy, F1, precision, recall
+- **Per data_type** (`vanilla_harmful`, `vanilla_benign`, `adversarial_harmful`, `adversarial_benign`):
+  - accuracy
+  - **Attack Success Rate (ASR)** — fraction of harmful prompts the model failed to flag
+  - **Over-refusal Rate (ORR)** — fraction of benign prompts incorrectly flagged as harmful
+
+Input text is selected per example: the `adversarial` column is used for adversarial data types; `vanilla` is used otherwise.
+
+**Basic:**
+```bash
+python eval_wildjailbreak.py --model_path ./distilbert-base-uncased-nsfw
+```
+
+**Save per-example predictions:**
+```bash
+python eval_wildjailbreak.py --model_path ./distilbert-base-uncased-nsfw \
+    --output_file predictions.csv
+```
+
+**Disable W&B:**
+```bash
+python eval_wildjailbreak.py --model_path ./distilbert-base-uncased-nsfw --no_wandb
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--model_path` | *(required)* | Local path or HuggingFace hub ID of the fine-tuned model |
+| `--split` | `eval` | WildJailbreak config to load (`eval` = 2,210 held-out examples; `train` = 262K) |
+| `--batch_size` | `64` | Inference batch size |
+| `--max_seq_length` | `128` | Max token length for truncation |
+| `--output_file` | `None` | Optional CSV path for per-example predictions |
+| `--wandb_project` | `distilbert-nsfw` | W&B project name |
+| `--wandb_run_name` | auto | W&B run name |
+| `--no_wandb` | `False` | Disable W&B logging |
+
+---
+
 ## Ablations
 
 Run each model with identical hyperparameters to isolate the effect of architecture:
