@@ -47,8 +47,8 @@ python train.py \
 | `--weight_decay` | `0.01` | Weight decay |
 | `--max_seq_length` | `128` | Max token length for truncation |
 | `--seed` | `42` | Random seed |
-| `--eval_strategy` | `epoch` | When to evaluate: `epoch` or `steps` |
-| `--eval_steps` | `500` | Evaluate every N steps (only when `--eval_strategy=steps`) |
+| `--eval_strategy` | `steps` | When to evaluate: `steps` or `epoch` |
+| `--eval_steps` | `100` | Evaluate every N steps (only when `--eval_strategy=steps`) |
 | `--wandb_project` | `distilbert-nsfw` | W&B project name |
 | `--wandb_run_name` | auto | W&B run name |
 | `--no_wandb` | `False` | Disable W&B logging |
@@ -93,6 +93,65 @@ python eval_wildjailbreak.py --model_path ./distilbert-base-uncased-nsfw --no_wa
 | `--wandb_project` | `distilbert-nsfw` | W&B project name |
 | `--wandb_run_name` | auto | W&B run name |
 | `--no_wandb` | `False` | Disable W&B logging |
+
+---
+
+## Calibration and Threshold Tuning
+
+`calibrate.py` runs post-hoc on a trained checkpoint and produces a `calibration.json` file that should be loaded at inference time.
+
+**Steps performed:**
+
+1. **Temperature scaling** — finds a scalar temperature `T` that minimises negative log-likelihood on the eval set. Applies `softmax(logits / T)` to produce better-calibrated probabilities.
+2. **Single threshold** — sweeps 181 thresholds (0.05 → 0.95) on the calibrated NSFW-class probability and picks the one that maximises F1.
+3. **Dual threshold** — searches over all `(t_low, t_high)` pairs. Samples with prob `< t_low` are labelled safe; samples with prob `> t_high` are labelled NSFW; samples in the gap `[t_low, t_high]` abstain for human review. The pair that maximises F1 on covered samples subject to `coverage >= --min_coverage` is selected.
+
+**Basic:**
+```bash
+python calibrate.py --model_dir ./distilbert-base-uncased-nsfw
+```
+
+**Require 90% of samples to receive a definitive label:**
+```bash
+python calibrate.py --model_dir ./distilbert-base-uncased-nsfw --min_coverage 0.9
+```
+
+**Disable W&B:**
+```bash
+python calibrate.py --model_dir ./distilbert-base-uncased-nsfw --no_wandb
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--model_dir` | *(required)* | Root output dir from training (must contain a `best/` subfolder) |
+| `--min_coverage` | `0.8` | Minimum fraction of eval samples that must receive a definitive label in dual-threshold mode |
+| `--max_seq_length` | `128` | Max token length for truncation |
+| `--per_device_eval_batch_size` | `64` | Evaluation batch size per device |
+| `--seed` | `42` | Random seed |
+| `--wandb_project` | `distilbert-nsfw` | W&B project name |
+| `--wandb_run_name` | auto | W&B run name |
+| `--no_wandb` | `False` | Disable W&B logging |
+
+### Output
+
+Saves `<model_dir>/best/calibration.json`:
+
+```json
+{
+  "temperature": 1.23,
+  "threshold": 0.42,
+  "calibrated_threshold_f1": 0.95,
+  "dual_threshold": {
+    "t_low": 0.25,
+    "t_high": 0.70,
+    "f1": 0.97,
+    "coverage": 0.83,
+    "abstain_rate": 0.17
+  }
+}
+```
 
 ---
 

@@ -61,11 +61,11 @@ def parse_args():
     parser.add_argument(
         "--eval_strategy",
         type=str,
-        default="epoch",
+        default="steps",
         choices=["epoch", "steps"],
-        help="Evaluation strategy: 'epoch' (default) or 'steps'",
+        help="Evaluation strategy: 'steps' (default) or 'epoch'",
     )
-    parser.add_argument("--eval_steps", type=int, default=500, help="Evaluate every N steps (only used when --eval_strategy=steps)")
+    parser.add_argument("--eval_steps", type=int, default=100, help="Evaluate every N steps (only used when --eval_strategy=steps)")
     return parser.parse_args()
 
 
