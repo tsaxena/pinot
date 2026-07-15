@@ -172,6 +172,40 @@ python train.py --model_name roberta-base --wandb_run_name roberta-ablation
 
 Each run saves its checkpoint to `./<model_name>-nsfw/` by default and logs to W&B under the same project for easy comparison.
 
+### DistilRoBERTa
+
+**Train:**
+```bash
+python train.py --model_name distilroberta-base --wandb_run_name distilroberta-ablation
+```
+
+**Calibrate:**
+```bash
+python calibrate.py --model_dir ./distilroberta-base-nsfw
+```
+
+**Evaluate on WildJailbreak:**
+```bash
+python eval_wildjailbreak.py --model_path ./distilroberta-base-nsfw/best
+```
+
+### RoBERTa
+
+**Train:**
+```bash
+python train.py --model_name roberta-base --wandb_run_name roberta-ablation
+```
+
+**Calibrate:**
+```bash
+python calibrate.py --model_dir ./roberta-base-nsfw
+```
+
+**Evaluate on WildJailbreak:**
+```bash
+python eval_wildjailbreak.py --model_path ./roberta-base-nsfw/best
+```
+
 ## Baseline Hyperparameters
 
 | Hyperparameter | Value |
