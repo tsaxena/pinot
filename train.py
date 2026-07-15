@@ -4,6 +4,8 @@ Fine-tune DistilBERT on eliasalbouzidi/NSFW-Safe-Dataset for text classification
 
 import argparse
 import numpy as np
+import torch
+import torch.nn as nn
 import wandb
 from datasets import load_dataset, ClassLabel
 from transformers import (
@@ -17,6 +19,18 @@ import evaluate
 
 MODEL_NAME = "distilbert-base-uncased"
 DATASET_NAME = "eliasalbouzidi/NSFW-Safe-Dataset"
+POS_WEIGHT = 1.66  # weight for the positive (NSFW) class in CrossEntropyLoss
+
+
+class WeightedTrainer(Trainer):
+    """Trainer that uses CrossEntropyLoss with class weights [1.0, POS_WEIGHT]."""
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        weight = torch.tensor([1.0, POS_WEIGHT], device=outputs.logits.device)
+        loss = nn.CrossEntropyLoss(weight=weight)(outputs.logits, labels)
+        return (loss, outputs) if return_outputs else loss
 
 
 def parse_args():
@@ -113,6 +127,7 @@ def main():
                 "weight_decay": args.weight_decay,
                 "max_seq_length": args.max_seq_length,
                 "seed": args.seed,
+                "pos_weight": POS_WEIGHT,
             },
         )
 
@@ -122,6 +137,8 @@ def main():
     print(f"Loading dataset: {DATASET_NAME}")
     dataset = load_dataset(DATASET_NAME)
     print(dataset)
+    for split, ds in dataset.items():
+        print(f"  {split} columns: {ds.column_names}")
 
     text_col, label_col = find_text_and_label_columns(dataset)
     num_labels, id2label, label2id = get_label_info(dataset, label_col)
@@ -216,7 +233,8 @@ def main():
         report_to="wandb",
     )
 
-    trainer = Trainer(
+    print(f"Using weighted CrossEntropyLoss with class weights [1.0, {POS_WEIGHT}]")
+    trainer = WeightedTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

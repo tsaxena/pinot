@@ -48,6 +48,14 @@ def main():
     dataset = load_dataset(DATASET_NAME)
 
     # ------------------------------------------------------------------
+    # 0. Column names
+    # ------------------------------------------------------------------
+    print_section("Column Names")
+    for split in SPLITS:
+        cols = dataset[split].column_names
+        print(f"  {split:<12}: {cols}")
+
+    # ------------------------------------------------------------------
     # 1. Split sizes
     # ------------------------------------------------------------------
     print_section("Split Sizes")
