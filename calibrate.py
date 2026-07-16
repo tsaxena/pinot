@@ -25,7 +25,10 @@ import wandb
 from datasets import load_dataset, ClassLabel
 from scipy.optimize import minimize_scalar
 from scipy.special import softmax as scipy_softmax
-from sklearn.metrics import f1_score, classification_report
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend, safe for headless environments
+import matplotlib.pyplot as plt
+from sklearn.metrics import f1_score, classification_report, precision_recall_curve, auc
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -255,12 +258,65 @@ def main():
         dual_config = dual
 
     # ------------------------------------------------------------------
-    # 7. Log and save
+    # 7. AUPRC plot
+    # ------------------------------------------------------------------
+    precision_vals, recall_vals, pr_thresholds = precision_recall_curve(true_labels, cal_probs)
+    auprc = auc(recall_vals, precision_vals)
+    print(f"\nAUPRC: {auprc:.4f}")
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(recall_vals, precision_vals, linewidth=2, label=f"PR curve (AUPRC = {auprc:.4f})")
+
+    # Mark the optimal single threshold on the curve.
+    # pr_thresholds has length N-1 relative to precision_vals/recall_vals,
+    # so we find the index where the threshold crosses best_threshold.
+    opt_idx = np.searchsorted(pr_thresholds, best_threshold, side="left")
+    opt_idx = min(opt_idx, len(recall_vals) - 1)
+    ax.scatter(
+        recall_vals[opt_idx],
+        precision_vals[opt_idx],
+        marker="*",
+        s=220,
+        color="red",
+        zorder=5,
+        label=f"Single threshold = {best_threshold:.2f}  (F1={best_f1:.4f})",
+    )
+
+    # Mark dual thresholds if found.
+    if dual_config:
+        for label_name, t_val in [("t_low", dual_config["t_low"]), ("t_high", dual_config["t_high"])]:
+            idx = np.searchsorted(pr_thresholds, t_val, side="left")
+            idx = min(idx, len(recall_vals) - 1)
+            ax.scatter(
+                recall_vals[idx],
+                precision_vals[idx],
+                marker="D",
+                s=90,
+                zorder=5,
+                label=f"Dual {label_name} = {t_val:.2f}",
+            )
+
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title(f"Precision-Recall Curve — {os.path.basename(args.model_dir)}")
+    ax.legend(loc="lower left")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(True, alpha=0.3)
+
+    plot_path = os.path.join(best_model_dir, "auprc.png")
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"AUPRC plot saved to {plot_path}")
+
+    # ------------------------------------------------------------------
+    # 8. Log and save
     # ------------------------------------------------------------------
     log_payload = {
         "calibration_temperature": temperature,
         "optimal_threshold": best_threshold,
         "calibrated_threshold_f1": best_f1,
+        "auprc": auprc,
     }
     if dual_config:
         log_payload.update({
@@ -276,6 +332,7 @@ def main():
         "temperature": temperature,
         "threshold": best_threshold,
         "calibrated_threshold_f1": best_f1,
+        "auprc": auprc,
         "dual_threshold": dual_config,
     }
     cal_path = os.path.join(best_model_dir, "calibration.json")
