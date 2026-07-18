@@ -1,0 +1,13 @@
+{
+  "temperature": 1.8487224411525913,
+  "threshold": 0.595,
+  "calibrated_threshold_f1": 0.9772953594901415,
+  "auprc": 0.9974724683955745,
+  "dual_threshold": {
+    "t_low": 0.05,
+    "t_high": 0.95,
+    "f1": 0.9927109615923746,
+    "coverage": 0.9488817097415507,
+    "abstain_rate": 0.05111829025844927
+  }
+}
