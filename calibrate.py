@@ -2,18 +2,22 @@
 Post-hoc calibration and threshold tuning for a trained NSFW classifier.
 
 Steps:
-  1. Load the best model from <model_dir>/best
+  1. Load the best model from <model_dir>/best  OR  directly from --model_path
   2. Run inference on the eval split to collect logits + true labels
   3. Temperature scaling  – find T that minimises NLL on the eval set
   4. Single threshold     – sweep thresholds on calibrated probs, maximise F1
   5. Dual threshold       – find (t_low, t_high) pair; samples in the gap abstain
                            for human review; maximises F1 on covered samples
                            subject to coverage >= --min_coverage
-  6. Save calibration.json to <model_dir>/best/
+  6. Save calibration.json to <model_dir>/best/  OR  to --output_dir
 
-Usage:
+Usage (local training output):
   python calibrate.py --model_dir ./distilbert-base-uncased-nsfw
   python calibrate.py --model_dir ./roberta-base-nsfw --min_coverage 0.9
+
+Usage (HuggingFace Hub model):
+  python calibrate.py --model_path tsaxena/distilbert-nsfw
+  python calibrate.py --model_path tsaxena/distilbert-nsfw --output_dir ./calibration_out
 """
 
 import argparse
@@ -42,7 +46,10 @@ DATASET_NAME = "eliasalbouzidi/NSFW-Safe-Dataset"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Calibrate and tune threshold for a trained NSFW classifier")
-    parser.add_argument("--model_dir", type=str, required=True, help="Root output dir used during training (contains best/ subfolder)")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--model_dir", type=str, help="Root output dir used during training (contains best/ subfolder)")
+    source.add_argument("--model_path", type=str, help="Direct path or HuggingFace Hub ID for the model checkpoint")
+    parser.add_argument("--output_dir", type=str, default=None, help="Directory to save calibration.json and auprc.png (only used with --model_path; defaults to ./<model-name>-calibration)")
     parser.add_argument("--max_seq_length", type=int, default=128)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
@@ -128,13 +135,26 @@ def find_text_and_label_columns(dataset):
 
 def main():
     args = parse_args()
-    best_model_dir = os.path.join(args.model_dir, "best")
 
-    if not os.path.isdir(best_model_dir):
-        raise FileNotFoundError(
-            f"Best model directory not found: {best_model_dir}\n"
-            "Run train.py first or pass --model_dir pointing to the training output root."
-        )
+    # Resolve model source and output directory.
+    if args.model_dir is not None:
+        best_model_dir = os.path.join(args.model_dir, "best")
+        if not os.path.isdir(best_model_dir):
+            raise FileNotFoundError(
+                f"Best model directory not found: {best_model_dir}\n"
+                "Run train.py first or pass --model_dir pointing to the training output root."
+            )
+        model_source = best_model_dir
+        output_dir = best_model_dir
+        run_label = os.path.basename(args.model_dir)
+    else:
+        model_source = args.model_path
+        run_label = args.model_path.replace("/", "-")
+        if args.output_dir:
+            output_dir = args.output_dir
+        else:
+            output_dir = f"./{run_label}-calibration"
+        os.makedirs(output_dir, exist_ok=True)
 
     # ------------------------------------------------------------------
     # 0. W&B
@@ -144,7 +164,7 @@ def main():
     else:
         wandb.init(
             project=args.wandb_project,
-            name=args.wandb_run_name or f"calibrate-{os.path.basename(args.model_dir)}",
+            name=args.wandb_run_name or f"calibrate-{run_label}",
         )
 
     # ------------------------------------------------------------------
@@ -164,7 +184,7 @@ def main():
     # ------------------------------------------------------------------
     # 2. Tokenise
     # ------------------------------------------------------------------
-    tokenizer = AutoTokenizer.from_pretrained(best_model_dir)
+    tokenizer = AutoTokenizer.from_pretrained(model_source)
 
     def tokenize(batch):
         return tokenizer(batch[text_col], truncation=True, max_length=args.max_seq_length)
@@ -181,7 +201,7 @@ def main():
     # ------------------------------------------------------------------
     # 3. Load model and collect logits
     # ------------------------------------------------------------------
-    model = AutoModelForSequenceClassification.from_pretrained(best_model_dir)
+    model = AutoModelForSequenceClassification.from_pretrained(model_source)
 
     # Minimal TrainingArguments just for inference
     eval_args = TrainingArguments(
@@ -298,13 +318,13 @@ def main():
 
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
-    ax.set_title(f"Precision-Recall Curve — {os.path.basename(args.model_dir)}")
+    ax.set_title(f"Precision-Recall Curve — {run_label}")
     ax.legend(loc="lower left")
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     ax.grid(True, alpha=0.3)
 
-    plot_path = os.path.join(best_model_dir, "auprc.png")
+    plot_path = os.path.join(output_dir, "auprc.png")
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"AUPRC plot saved to {plot_path}")
@@ -335,7 +355,7 @@ def main():
         "auprc": auprc,
         "dual_threshold": dual_config,
     }
-    cal_path = os.path.join(best_model_dir, "calibration.json")
+    cal_path = os.path.join(output_dir, "calibration.json")
     with open(cal_path, "w") as f:
         json.dump(cal_config, f, indent=2)
     print(f"\nCalibration config saved to {cal_path}")

@@ -241,3 +241,39 @@ loss = nn.CrossEntropyLoss(weight=weight)(outputs.logits, labels)
 ```
 
 The best model checkpoint is selected by **F1 score** on the evaluation set.
+
+---
+
+## Uploading to HuggingFace Hub
+
+After training (and optionally calibrating), push the best checkpoint to the Hub with `upload.py`. It uploads the model, tokenizer, and any extra artefacts (`calibration.json`, `auprc.png`) found in `<model_dir>/best/`.
+
+**Authenticate first:**
+```bash
+huggingface-cli login
+# or export HF_TOKEN=<your-token>
+```
+
+**Basic:**
+```bash
+python upload.py \
+  --model_dir ./distilbert-base-uncased-nsfw \
+  --hub_model_id username/distilbert-nsfw
+```
+
+**Private repository:**
+```bash
+python upload.py \
+  --model_dir ./distilbert-base-uncased-nsfw \
+  --hub_model_id username/distilbert-nsfw \
+  --private
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--model_dir` | *(required)* | Root output dir from training (must contain a `best/` subfolder) |
+| `--hub_model_id` | *(required)* | HuggingFace Hub repo ID, e.g. `username/distilbert-nsfw` |
+| `--commit_message` | `Upload best checkpoint` | Commit message for the Hub push |
+| `--private` | `False` | Create the Hub repository as private |
