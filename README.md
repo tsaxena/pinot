@@ -155,6 +155,40 @@ Saves `<model_dir>/best/calibration.json`:
 
 ---
 
+## Calibrated Evaluation on Test Split
+
+`eval_test.py` runs the held-out test split of `eliasalbouzidi/NSFW-Safe-Dataset` through the model using a `calibration.json` produced by `calibrate.py`. It applies temperature scaling and the tuned threshold(s) and reports a classification report for both single- and dual-threshold modes.
+
+**Basic (uses `calibration.json` in the current directory):**
+```bash
+python eval_test.py
+```
+
+**Specify model and calibration file explicitly:**
+```bash
+python eval_test.py \
+  --model_source ./distilbert-base-uncased-nsfw/best \
+  --calibration_file ./distilbert-base-uncased-nsfw/best/calibration.json
+```
+
+**HuggingFace Hub model with a local calibration file:**
+```bash
+python eval_test.py \
+  --model_source tsaxena/distilbert-nsfw \
+  --calibration_file ./calibration_out/calibration.json
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--model_source` | `tsaxena/distilbert-nsfw` | Local path or HuggingFace Hub ID of the model |
+| `--calibration_file` | `calibration.json` | Path to `calibration.json` produced by `calibrate.py` |
+| `--max_seq_length` | `128` | Max token length for truncation |
+| `--per_device_eval_batch_size` | `64` | Evaluation batch size per device |
+
+---
+
 ## Ablations
 
 Run each model with identical hyperparameters to isolate the effect of architecture:
