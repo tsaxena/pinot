@@ -1,16 +1,12 @@
 """
-Evaluate a fine-tuned safety classifier on yiting/UnsafeBench.
-
-UnsafeBench is primarily an image benchmark; each example optionally carries a
-text caption/prompt.  Since the model is a text classifier only the subset of
-examples with non-empty text is evaluated.
+Evaluate a fine-tuned safety classifier on a local prompt dataset.
 
 Columns used
 ------------
-  text         : caption or generation prompt (optional — empty rows are skipped)
+  text         : prompt text (empty rows are skipped)
   safety_label : "Unsafe" → 1 (harmful), "Safe" → 0 (benign)
-  category     : type of unsafe content (e.g. "Hate", "Violence", …) — 11 classes
-  source       : "Laion5B" (real-world images) or "Lexica" (AI-generated images)
+  source       : origin of the prompt (e.g. "4chan", "Lexica", "Template", "COCO")
+  category     : optional — per-category metrics reported only if column is present
 
 Metrics reported
 ----------------
@@ -18,17 +14,22 @@ Metrics reported
   Per category    : accuracy
                     + attack_success_rate  (fraction of Unsafe examples predicted Safe)
                     + over_refusal_rate    (fraction of Safe examples predicted Unsafe)
+                    (skipped if no category column)
   Per source      : same triplet as per-category
 
 Usage
 -----
-  # Evaluate a local checkpoint on the test split (default)
+  # Evaluate on the default local dataset
   python eval_unsafebench.py --model_path ./distilbert-base-uncased-nsfw
+
+  # Specify a different CSV
+  python eval_unsafebench.py --model_path ./distilbert-base-uncased-nsfw \\
+      --data_file ./data/my_prompts.csv
 
   # Use calibration and save per-example predictions
   python eval_unsafebench.py --model_path tsaxena/distilbert-nsfw \\
       --calibration_file tsaxena-distilbert-nsfw-calibration/calibration.json \\
-      --output_file unsafebench_preds.csv
+      --output_file preds.csv
 
   # Disable W&B
   python eval_unsafebench.py --model_path tsaxena/distilbert-nsfw --no_wandb
@@ -44,11 +45,13 @@ import pandas as pd
 import torch
 import wandb
 import evaluate
-from datasets import load_dataset
 from sklearn.metrics import classification_report
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-EVAL_DATASET = "yiting/UnsafeBench"
+DEFAULT_DATA_FILE = os.path.join(
+    os.path.dirname(__file__),
+    "data", "Unsafe Prompts&Images Dataset", "prompts", "all_prompts.csv",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -67,11 +70,10 @@ def parse_args():
         help="Local path or HuggingFace hub ID of the fine-tuned model",
     )
     parser.add_argument(
-        "--split",
+        "--data_file",
         type=str,
-        default="test",
-        choices=["train", "test"],
-        help="UnsafeBench split to load ('test' = 2,037 held-out examples)",
+        default=DEFAULT_DATA_FILE,
+        help="Path to the CSV file containing prompts (columns: text, safety_label, source[, category])",
     )
     parser.add_argument("--batch_size", type=int, default=64, help="Inference batch size")
     parser.add_argument("--max_seq_length", type=int, default=128, help="Max tokenization length")
@@ -221,8 +223,7 @@ def main():
             name=args.wandb_run_name,
             config={
                 "model_path": args.model_path,
-                "eval_dataset": EVAL_DATASET,
-                "split": args.split,
+                "data_file": args.data_file,
                 "batch_size": args.batch_size,
                 "max_seq_length": args.max_seq_length,
                 "calibration_file": args.calibration_file,
@@ -251,25 +252,23 @@ def main():
     # ------------------------------------------------------------------
     # Load dataset
     # ------------------------------------------------------------------
-    print(f"\nLoading {EVAL_DATASET} (split='{args.split}') ...")
-    raw = load_dataset(EVAL_DATASET, split=args.split)
-    # load_dataset may return a Dataset or a DatasetDict
-    if hasattr(raw, "keys"):
-        ds = raw[list(raw.keys())[0]]
-    else:
-        ds = raw
-    print(f"Loaded {len(ds)} examples  |  columns: {ds.column_names}")
+    print(f"\nLoading data from: {args.data_file}")
+    df = pd.read_csv(args.data_file)
+    print(f"Loaded {len(df)} rows  |  columns: {df.columns.tolist()}")
 
-    label_counts = Counter(ds["safety_label"])
+    label_counts = Counter(df["safety_label"])
     for lbl, cnt in sorted(label_counts.items()):
         print(f"  safety_label={lbl!r}: {cnt}")
 
-    category_counts = Counter(ds["category"])
-    print(f"\nCategories ({len(category_counts)}):")
-    for cat, cnt in sorted(category_counts.items()):
-        print(f"  {cat}: {cnt}")
+    has_category = "category" in df.columns
 
-    source_counts = Counter(ds["source"])
+    if has_category:
+        category_counts = Counter(df["category"])
+        print(f"\nCategories ({len(category_counts)}):")
+        for cat, cnt in sorted(category_counts.items()):
+            print(f"  {cat}: {cnt}")
+
+    source_counts = Counter(df["source"])
     print(f"\nSources:")
     for src, cnt in sorted(source_counts.items()):
         print(f"  {src}: {cnt}")
@@ -277,17 +276,16 @@ def main():
     # ------------------------------------------------------------------
     # Filter to examples with non-empty text
     # ------------------------------------------------------------------
-    # UnsafeBench text captions are optional; skip rows where text is absent.
-    def has_text(ex):
-        t = ex.get("text") or ""
+    def has_text(row):
+        t = row.get("text") if isinstance(row, dict) else row
         return isinstance(t, str) and t.strip() not in ("", "xxx", "N/A", "n/a")
 
-    pre_filter = len(ds)
-    ds = ds.filter(has_text)
-    n_skipped = pre_filter - len(ds)
-    print(f"\nText filter: kept {len(ds)}/{pre_filter} examples ({n_skipped} skipped — no caption)")
+    pre_filter = len(df)
+    df = df[df["text"].apply(lambda t: isinstance(t, str) and t.strip() not in ("", "xxx", "N/A", "n/a"))].reset_index(drop=True)
+    n_skipped = pre_filter - len(df)
+    print(f"\nText filter: kept {len(df)}/{pre_filter} examples ({n_skipped} skipped — no text)")
 
-    if len(ds) == 0:
+    if len(df) == 0:
         print("ERROR: No examples with non-empty text found. Cannot evaluate a text classifier.")
         wandb.finish()
         return
@@ -295,10 +293,10 @@ def main():
     # ------------------------------------------------------------------
     # Prepare inputs
     # ------------------------------------------------------------------
-    texts = [ex["text"].strip() for ex in ds]
-    true_labels = [get_true_label(ex["safety_label"]) for ex in ds]
-    categories = list(ds["category"])
-    sources = list(ds["source"])
+    texts = df["text"].str.strip().tolist()
+    true_labels = [get_true_label(v) for v in df["safety_label"]]
+    categories = df["category"].tolist() if has_category else []
+    sources = df["source"].tolist()
 
     n_unsafe = sum(true_labels)
     print(f"\nUnsafe: {n_unsafe}  |  Safe: {len(true_labels) - n_unsafe}")
@@ -341,16 +339,17 @@ def main():
         print(f"  {k:10s}: {v:.4f}")
 
     # ------------------------------------------------------------------
-    # Per-category metrics
+    # Per-category metrics (only when category column is present)
     # ------------------------------------------------------------------
-    print_section("PER CATEGORY METRICS")
     per_category_metrics = {}
-    for cat in sorted(set(categories)):
-        idxs = [i for i, c in enumerate(categories) if c == cat]
-        cat_true = [true_labels[i] for i in idxs]
-        cat_pred = pred_labels[idxs].tolist()
-        print(f"\n  [{cat}]  n={len(idxs)}")
-        per_category_metrics[cat] = eval_subset(cat_true, cat_pred, cat)
+    if has_category:
+        print_section("PER CATEGORY METRICS")
+        for cat in sorted(set(categories)):
+            idxs = [i for i, c in enumerate(categories) if c == cat]
+            cat_true = [true_labels[i] for i in idxs]
+            cat_pred = pred_labels[idxs].tolist()
+            print(f"\n  [{cat}]  n={len(idxs)}")
+            per_category_metrics[cat] = eval_subset(cat_true, cat_pred, cat)
 
     # ------------------------------------------------------------------
     # Per-source metrics
@@ -435,7 +434,7 @@ def main():
     wandb.log(log_dict)
     wandb.finish()
 
-    print(f"\nDone.  Evaluated on {len(texts)} examples with non-empty text captions.")
+    print(f"\nDone.  Evaluated on {len(texts)} examples from {args.data_file}.")
     return overall
 
 
