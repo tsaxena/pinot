@@ -28,6 +28,7 @@ Usage
 """
 
 import argparse
+import json
 import os
 from collections import Counter
 
@@ -73,6 +74,8 @@ def parse_args():
         default=None,
         help="Optional CSV path to write per-example predictions",
     )
+    parser.add_argument("--calibration_file", type=str, default=None,
+        help="Path to calibration.json produced by calibrate.py (applies temperature scaling and calibrated threshold)")
     parser.add_argument("--wandb_project", type=str, default="distilbert-nsfw")
     parser.add_argument("--wandb_run_name", type=str, default=None)
     parser.add_argument("--no_wandb", action="store_true", help="Disable W&B logging")
@@ -104,14 +107,20 @@ def get_true_label(example: dict) -> int:
     return 1 if "harmful" in example["data_type"] else 0
 
 
-def batch_predict(model, tokenizer, texts, batch_size, max_seq_length, device):
+def batch_predict(model, tokenizer, texts, batch_size, max_seq_length, device, temperature=1.0):
     """
     Run batched inference.
+
+    Parameters
+    ----------
+    temperature : float
+        Temperature scaling factor from calibration.json.  Values > 1 soften the
+        distribution; values < 1 sharpen it.  Use 1.0 (default) for no scaling.
 
     Returns
     -------
     raw_preds : np.ndarray of shape (N,)   — argmax label IDs from the model
-    probs     : np.ndarray of shape (N, C) — softmax probabilities
+    probs     : np.ndarray of shape (N, C) — temperature-scaled softmax probabilities
     """
     all_preds, all_probs = [], []
     n = len(texts)
@@ -127,7 +136,7 @@ def batch_predict(model, tokenizer, texts, batch_size, max_seq_length, device):
         enc = {k: v.to(device) for k, v in enc.items()}
         with torch.no_grad():
             logits = model(**enc).logits
-        probs = torch.softmax(logits, dim=-1).cpu().numpy()
+        probs = torch.softmax(logits / temperature, dim=-1).cpu().numpy()
         all_preds.extend(np.argmax(probs, axis=-1).tolist())
         all_probs.extend(probs.tolist())
         done = min(start + batch_size, n)
@@ -175,6 +184,24 @@ def main():
     args = parse_args()
 
     # ------------------------------------------------------------------
+    # Calibration
+    # ------------------------------------------------------------------
+    calibration = {}
+    temperature = 1.0
+    threshold = 0.5
+    if args.calibration_file:
+        with open(args.calibration_file) as f:
+            calibration = json.load(f)
+        temperature = calibration.get("temperature", 1.0)
+        threshold = calibration.get("threshold", 0.5)
+        print(f"Calibration loaded from: {args.calibration_file}")
+        print(f"  temperature : {temperature:.4f}")
+        print(f"  threshold   : {threshold:.4f}")
+        if calibration.get("dual_threshold"):
+            dt = calibration["dual_threshold"]
+            print(f"  dual_threshold: t_low={dt['t_low']}, t_high={dt['t_high']}")
+
+    # ------------------------------------------------------------------
     # W&B
     # ------------------------------------------------------------------
     if args.no_wandb:
@@ -189,6 +216,9 @@ def main():
                 "split": args.split,
                 "batch_size": args.batch_size,
                 "max_seq_length": args.max_seq_length,
+                "calibration_file": args.calibration_file,
+                "calibration_temperature": temperature,
+                "calibration_threshold": threshold,
             },
         )
 
@@ -237,11 +267,15 @@ def main():
     # ------------------------------------------------------------------
     print("\nRunning inference ...")
     raw_preds, probs = batch_predict(
-        model, tokenizer, texts, args.batch_size, args.max_seq_length, device
+        model, tokenizer, texts, args.batch_size, args.max_seq_length, device,
+        temperature=temperature,
     )
 
-    # Re-map model label IDs → binary: harmful=1, benign=0
-    pred_labels = (raw_preds == harmful_label_id).astype(int)
+    # Apply calibrated threshold on harmful-class probability; fall back to
+    # argmax when no calibration file is provided (threshold stays at 0.5,
+    # which is equivalent for a two-class model).
+    harmful_probs = probs[:, harmful_label_id]
+    pred_labels = (harmful_probs >= threshold).astype(int)
 
     # ------------------------------------------------------------------
     # Overall metrics
@@ -287,19 +321,23 @@ def main():
     # Save per-example predictions (optional)
     # ------------------------------------------------------------------
     if args.output_file:
-        harmful_prob = probs[:, harmful_label_id]
         df = pd.DataFrame({
             "data_type"   : data_types,
             "text"        : texts,
             "true_label"  : true_labels,
             "pred_label"  : pred_labels,
-            "harmful_prob": harmful_prob,
+            "harmful_prob": harmful_probs,
             "correct"     : (np.array(true_labels) == pred_labels).astype(int),
         })
         out_dir = os.path.dirname(os.path.abspath(args.output_file))
         os.makedirs(out_dir, exist_ok=True)
         df.to_csv(args.output_file, index=False)
         print(f"\nPredictions saved to: {args.output_file}")
+
+    # ------------------------------------------------------------------
+    # Dual-threshold evaluation (if calibration provides one)
+    # ------------------------------------------------------------------
+    dual = calibration.get("dual_threshold") if calibration else None
 
     # ------------------------------------------------------------------
     # W&B logging
@@ -309,6 +347,31 @@ def main():
         for k, v in metrics.items():
             if k != "n":
                 log_dict[f"eval/{dt}/{k}"] = v
+
+    if dual and dual.get("t_low") is not None and dual.get("t_high") is not None:
+        t_low, t_high = dual["t_low"], dual["t_high"]
+        covered_mask = (harmful_probs < t_low) | (harmful_probs > t_high)
+        n_covered = int(covered_mask.sum())
+        n_abstained = len(harmful_probs) - n_covered
+        dual_true = np.array(true_list)[covered_mask]
+        dual_pred = (harmful_probs[covered_mask] >= t_high).astype(int)
+
+        print_section("DUAL-THRESHOLD EVALUATION")
+        print(f"  t_low={t_low}  t_high={t_high}")
+        print(f"  Covered  : {n_covered} ({n_covered/len(harmful_probs):.2%})")
+        print(f"  Abstained: {n_abstained} ({n_abstained/len(harmful_probs):.2%})")
+        print(classification_report(dual_true, dual_pred, target_names=["benign", "harmful"], digits=4))
+
+        dual_overall = {
+            "accuracy" : acc_metric.compute(predictions=dual_pred.tolist(), references=dual_true.tolist())["accuracy"],
+            "f1"       : f1_metric.compute(predictions=dual_pred.tolist(), references=dual_true.tolist(), average="binary", pos_label=1)["f1"],
+            "precision": prec_metric.compute(predictions=dual_pred.tolist(), references=dual_true.tolist(), average="binary", pos_label=1)["precision"],
+            "recall"   : rec_metric.compute(predictions=dual_pred.tolist(), references=dual_true.tolist(), average="binary", pos_label=1)["recall"],
+        }
+        log_dict.update({f"eval/dual/{k}": v for k, v in dual_overall.items()})
+        log_dict["eval/dual/coverage"] = n_covered / len(harmful_probs)
+        log_dict["eval/dual/abstain_rate"] = n_abstained / len(harmful_probs)
+
     wandb.log(log_dict)
     wandb.finish()
 
