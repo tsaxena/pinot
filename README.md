@@ -53,6 +53,49 @@ python train.py \
 | `--wandb_run_name` | auto | W&B run name |
 | `--no_wandb` | `False` | Disable W&B logging |
 
+## Evaluating on I2P
+
+[AIML-TUDA/i2p-benchmark](https://huggingface.co/datasets/AIML-TUDA/i2p-benchmark) is an all-unsafe benchmark of ~4,700 text-to-image prompts that have been shown to produce inappropriate content. Every example carries ground-truth label 1 (harmful), so the key question is how many prompts the classifier correctly flags. `eval_i2p.py` runs a trained checkpoint through the dataset and reports:
+
+- **Overall**: accuracy, F1, precision, recall, detection rate, ASR
+- **Per content category** (multi-label): ASR for each category (e.g. nudity, violence, hate)
+- **Hard vs. easy**: ASR split on the `hard` flag
+
+Since all examples are harmful there is no over-refusal rate; the primary metric is **Attack Success Rate (ASR)** — the fraction of prompts that evaded detection.
+
+**Basic:**
+```bash
+python eval_i2p.py --model_path ./distilbert-base-uncased-nsfw
+```
+
+**Use calibration and save per-example predictions:**
+```bash
+python eval_i2p.py --model_path tsaxena/distilbert-nsfw \
+    --calibration_file tsaxena-distilbert-nsfw-calibration/calibration.json \
+    --output_file i2p_preds.csv
+```
+
+**Disable W&B:**
+```bash
+python eval_i2p.py --model_path tsaxena/distilbert-nsfw --no_wandb
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--model_path` | *(required)* | Local path or HuggingFace hub ID of the fine-tuned model |
+| `--split` | `train` | Dataset split to load (I2P only exposes a `train` split) |
+| `--batch_size` | `64` | Inference batch size |
+| `--max_seq_length` | `128` | Max token length for truncation |
+| `--output_file` | `None` | Optional CSV path for per-example predictions |
+| `--calibration_file` | `None` | Path to `calibration.json` from `calibrate.py` |
+| `--wandb_project` | `distilbert-nsfw` | W&B project name |
+| `--wandb_run_name` | auto | W&B run name |
+| `--no_wandb` | `False` | Disable W&B logging |
+
+---
+
 ## Evaluating on WildJailbreak
 
 [allenai/wildjailbreak](https://huggingface.co/datasets/allenai/wildjailbreak) is a held-out benchmark of 2,210 adversarial prompts (2,000 harmful + 210 benign). `eval_wildjailbreak.py` runs a trained checkpoint through the dataset and reports:

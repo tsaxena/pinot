@@ -24,16 +24,23 @@ from transformers import (
 import evaluate
 
 DATASET_NAME = "eliasalbouzidi/NSFW-Safe-Dataset"
-POS_WEIGHT = 1.66  # weight for the positive (NSFW) class in CrossEntropyLoss
 
 
 class WeightedTrainer(Trainer):
-    """Trainer that uses CrossEntropyLoss with class weights [1.0, POS_WEIGHT]."""
+    """Trainer that uses CrossEntropyLoss with data-driven class weights.
+
+    Weights are computed as w_c = (1 - n_c / N) so that minority classes
+    receive higher weight.
+    """
+
+    def __init__(self, *args, class_weights: torch.Tensor, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_weights = class_weights
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
-        weight = torch.tensor([1.0, POS_WEIGHT], device=outputs.logits.device)
+        weight = self.class_weights.to(outputs.logits.device)
         loss = nn.CrossEntropyLoss(weight=weight)(outputs.logits, labels)
         return (loss, outputs) if return_outputs else loss
 
@@ -150,7 +157,6 @@ def main():
                 "weight_decay": args.weight_decay,
                 "max_seq_length": args.max_seq_length,
                 "seed": args.seed,
-                "pos_weight": POS_WEIGHT,
             },
         )
 
@@ -166,6 +172,19 @@ def main():
     text_col, label_col = find_text_and_label_columns(dataset)
     num_labels, id2label, label2id = get_label_info(dataset, label_col)
     print(f"Labels ({num_labels}): {id2label}")
+
+    # ------------------------------------------------------------------
+    # Compute class weights from training split: w_c = (1 - n_c / N)
+    # ------------------------------------------------------------------
+    raw_labels = dataset["train"][label_col]
+    N = len(raw_labels)
+    class_counts = [raw_labels.count(c) for c in range(num_labels)]
+    class_weights = torch.tensor(
+        [1.0 - n_c / N for n_c in class_counts], dtype=torch.float
+    )
+    print(f"Class counts : {dict(zip(id2label.values(), class_counts))}")
+    print(f"Class weights: {dict(zip(id2label.values(), class_weights.tolist()))}")
+    wandb.config.update({"class_weights": class_weights.tolist()})
 
     # Use 'test' split for evaluation if it exists, else split from train
     if "test" in dataset:
@@ -260,7 +279,6 @@ def main():
         report_to="wandb",
     )
 
-    print(f"Using weighted CrossEntropyLoss with class weights [1.0, {POS_WEIGHT}]")
     trainer = WeightedTrainer(
         model=model,
         args=training_args,
@@ -269,6 +287,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer),
         compute_metrics=compute_metrics,
+        class_weights=class_weights,
     )
 
     print("Starting training...")
