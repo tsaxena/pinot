@@ -50,7 +50,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 DEFAULT_DATA_FILE = os.path.join(
     os.path.dirname(__file__),
-    "data", "Unsafe Prompts&Images Dataset", "prompts", "all_prompts.csv",
+    "data", "all_prompts.csv",
 )
 
 
