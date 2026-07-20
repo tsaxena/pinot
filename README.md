@@ -189,6 +189,51 @@ python eval_test.py \
 
 ---
 
+## Evaluating on UnsafeBench
+
+[yiting/UnsafeBench](https://huggingface.co/datasets/yiting/UnsafeBench) is an image-safety benchmark. Each example optionally carries a text caption/prompt; only examples with non-empty text are evaluated. `eval_unsafebench.py` reports accuracy, F1, precision, recall overall, plus attack success rate and over-refusal rate broken down by category and source.
+
+**Basic:**
+```bash
+python eval_unsafebench.py --model_path ./distilbert-base-uncased-nsfw
+```
+
+**With calibration (recommended):**
+```bash
+python eval_unsafebench.py --model_path tsaxena/distilbert-nsfw \
+    --calibration_file tsaxena-distilbert-nsfw-calibration/calibration.json
+```
+
+**With calibration and save per-example predictions:**
+```bash
+python eval_unsafebench.py --model_path tsaxena/distilbert-nsfw \
+    --calibration_file tsaxena-distilbert-nsfw-calibration/calibration.json \
+    --output_file unsafebench_preds.csv
+```
+
+**Disable W&B:**
+```bash
+python eval_unsafebench.py --model_path ./distilbert-base-uncased-nsfw --no_wandb
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--model_path` | *(required)* | Local path or HuggingFace hub ID of the fine-tuned model |
+| `--split` | `test` | UnsafeBench split to load (`test` = 2,037 held-out examples) |
+| `--batch_size` | `64` | Inference batch size |
+| `--max_seq_length` | `128` | Max token length for truncation |
+| `--calibration_file` | `None` | Path to `calibration.json` from `calibrate.py` — applies temperature scaling and calibrated threshold |
+| `--output_file` | `None` | Optional CSV path for per-example predictions |
+| `--wandb_project` | `distilbert-nsfw` | W&B project name |
+| `--wandb_run_name` | auto | W&B run name |
+| `--no_wandb` | `False` | Disable W&B logging |
+
+When `--calibration_file` is provided, the script reads `temperature`, `threshold`, and optionally `dual_threshold` from the JSON and applies them during inference. Without it, the model uses the default threshold of 0.5.
+
+---
+
 ## Ablations
 
 Run each model with identical hyperparameters to isolate the effect of architecture:
