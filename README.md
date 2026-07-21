@@ -264,6 +264,7 @@ python eval_unsafebench.py --model_path ./distilbert-base-uncased-nsfw --no_wand
 | Argument | Default | Description |
 |---|---|---|
 | `--model_path` | *(required)* | Local path or HuggingFace hub ID of the fine-tuned model |
+| `--data_file` | `data/usafe_diffusion/all_prompts.csv` | Path to the CSV file containing prompts (columns: `text`, `safety_label`, `source`, optional `category`) |
 | `--split` | `test` | UnsafeBench split to load (`test` = 2,037 held-out examples) |
 | `--batch_size` | `64` | Inference batch size |
 | `--max_seq_length` | `128` | Max token length for truncation |
